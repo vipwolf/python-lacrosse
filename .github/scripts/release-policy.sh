@@ -14,11 +14,22 @@ case "$GITHUB_REF_TYPE:$GITHUB_REF_NAME" in
     branch:main|branch:develop)
         [[ "$GITHUB_RUN_ID" =~ ^[1-9][0-9]*$ ]]
         [[ "$GITHUB_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
-        version="0.0.${GITHUB_RUN_ID}.dev${GITHUB_RUN_ATTEMPT}"
+        tags=$(git tag --merged HEAD --sort=-version:refname)
+        version=''
+        while IFS= read -r tag; do
+            if [[ "$tag" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+                version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$((10#${BASH_REMATCH[3]} + 1)).dev${GITHUB_RUN_ID}"
+                break
+            fi
+        done <<< "$tags"
+        if [[ -z "$version" ]]; then
+            printf '%s\n' 'Branch builds require a reachable canonical X.Y.Z release tag.' >&2
+            exit 1
+        fi
         ;;
     tag:*)
-        if [[ ! "$GITHUB_REF_NAME" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-            printf '%s\n' 'Release tags must be canonical X.Y.Z versions.' >&2
+        if [[ ! "$GITHUB_REF_NAME" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)((a|b|rc)(0|[1-9][0-9]*))?$ ]]; then
+            printf '%s\n' 'Release tags must be canonical X.Y.Z versions with an optional aN, bN, or rcN suffix.' >&2
             exit 1
         fi
         [[ "$(git rev-parse --verify "refs/tags/${GITHUB_REF_NAME}^{commit}")" == "$GITHUB_SHA" ]]
