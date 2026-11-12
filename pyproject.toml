@@ -6,11 +6,13 @@ build-backend = "hatchling.build"
 name = "pylacrosse"
 dynamic = ["version"]
 description = "LaCrosse sensor library"
-readme = "README.rst"
+readme = "README.md"
 requires-python = ">=3.11"
 license = "LGPL-2.1-or-later"
 authors = [
   { name = "Heiko Thiery", email = "heiko.thiery@gmail.com" },
+]
+maintainers = [
   { name = "Benjamin Schleinzer" },
 ]
 dependencies = [
@@ -50,7 +52,7 @@ release = [
 
 [tool.hatch.version]
 source = "vcs"
-tag-pattern = "^(?P<version>\\d+\\.\\d+\\.\\d+)$"
+tag-pattern = "^(?P<version>(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:(?:a|b|rc)(?:0|[1-9][0-9]*))?)$"
 fallback-version = "0.0.0"
 
 [tool.hatch.version.raw-options]
@@ -63,7 +65,7 @@ version-file = "pylacrosse/version.py"
 packages = ["pylacrosse"]
 
 [tool.hatch.build.targets.sdist]
-include = ["/AUTHORS", "/COPYING", "/README.rst", "/pyproject.toml", "/pylacrosse"]
+include = ["/AUTHORS", "/COPYING", "/README.md", "/pyproject.toml", "/pylacrosse"]
 exclude = ["/tests"]
 
 [tool.pytest.ini_options]

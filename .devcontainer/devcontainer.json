@@ -8,6 +8,10 @@
     },
     "ghcr.io/devcontainers-extra/features/actionlint:1": {
       "version": "1.7.12"
+    },
+    "ghcr.io/devcontainers/features/github-cli:1": {
+      "version": "latest",
+      "extensions": "github/gh-actions-lock"
     }
   },
   "containerEnv": {

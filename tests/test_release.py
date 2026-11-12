@@ -38,6 +38,7 @@ def release_repository(tmp_path: Path) -> Path:
     origin.mkdir()
     git(origin, "init", "--initial-branch=main")
     git(origin, "commit", "--allow-empty", "-m", "Initial release commit")
+    git(origin, "tag", "0.5.0")
     repository = tmp_path / "checkout"
     git(tmp_path, "clone", "--no-hardlinks", str(origin), str(repository))
     return repository
@@ -77,10 +78,36 @@ def test_branch_versions_are_public_and_unique(
 ) -> None:
     result = run_policy(GITHUB_REF_NAME=branch)
     assert result.returncode == 0, result.stderr
-    assert (tmp_path / "output").read_text() == "version=0.0.123.dev2\n"
+    assert (tmp_path / "output").read_text() == "version=0.5.1.dev123\n"
     result = run_policy(GITHUB_REF_NAME=branch, GITHUB_RUN_ATTEMPT="3")
     assert result.returncode == 0, result.stderr
-    assert (tmp_path / "output").read_text().endswith("version=0.0.123.dev3\n")
+    assert (tmp_path / "output").read_text().endswith("version=0.5.1.dev123\n")
+    result = run_policy(GITHUB_REF_NAME=branch, GITHUB_RUN_ID="124")
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "output").read_text().endswith("version=0.5.1.dev124\n")
+
+
+def test_branch_version_uses_latest_reachable_canonical_tag(
+    release_repository: Path, run_policy: PolicyRunner, tmp_path: Path
+) -> None:
+    for tag in ["1.2.9", "1.2.10", "v9.0.0", "9.0.0rc1", "09.0.0", "9.0.0.1"]:
+        git(release_repository, "tag", tag)
+    git(release_repository, "checkout", "-b", "unmerged")
+    git(release_repository, "commit", "--allow-empty", "-m", "Unmerged release")
+    git(release_repository, "tag", "9.0.0")
+    git(release_repository, "checkout", "main")
+    result = run_policy()
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "output").read_text() == "version=1.2.11.dev123\n"
+
+
+def test_branch_without_release_tag_is_rejected(
+    release_repository: Path, run_policy: PolicyRunner
+) -> None:
+    git(release_repository, "tag", "--delete", "0.5.0")
+    result = run_policy()
+    assert result.returncode != 0
+    assert "require a reachable canonical X.Y.Z release tag" in result.stderr
 
 
 @pytest.mark.parametrize(
@@ -107,33 +134,56 @@ def test_disallowed_contexts_fail_closed(
 
 
 @pytest.mark.parametrize("annotated", [False, True])
+@pytest.mark.parametrize("tag", ["1.2.3", "1.2.3a0", "1.2.3a1", "1.2.3b2", "1.2.3rc1"])
 def test_release_tags_on_main_are_accepted(
     release_repository: Path,
     run_policy: PolicyRunner,
     tmp_path: Path,
     annotated: bool,
+    tag: str,
 ) -> None:
-    arguments = ["tag", "1.2.3"]
+    arguments = ["tag", tag]
     if annotated:
         arguments.extend(["--annotate", "--message", "Release 1.2.3"])
     git(release_repository, *arguments)
-    result = run_policy(GITHUB_REF_TYPE="tag", GITHUB_REF_NAME="1.2.3")
+    result = run_policy(GITHUB_REF_TYPE="tag", GITHUB_REF_NAME=tag)
     assert result.returncode == 0, result.stderr
-    assert (tmp_path / "output").read_text() == "version=1.2.3\n"
+    assert (tmp_path / "output").read_text() == f"version={tag}\n"
 
 
-@pytest.mark.parametrize("tag", ["v1.2.3", "1.2.3rc1", "01.2.3", "1.2", "1.2.3.4"])
-def test_noncanonical_tags_are_rejected(run_policy: PolicyRunner, tag: str) -> None:
-    assert run_policy(GITHUB_REF_TYPE="tag", GITHUB_REF_NAME=tag).returncode != 0
+@pytest.mark.parametrize(
+    "tag",
+    [
+        "v1.2.3",
+        "01.2.3",
+        "1.2",
+        "1.2.3.4",
+        "1.2.3alpha1",
+        "1.2.3a",
+        "1.2.3a01",
+        "1.2.3RC1",
+        "1.2.3.dev1",
+        "1.2.3.post1",
+        "1.2.3+local",
+    ],
+)
+def test_noncanonical_tags_are_rejected(
+    release_repository: Path, run_policy: PolicyRunner, tag: str
+) -> None:
+    git(release_repository, "tag", tag)
+    result = run_policy(GITHUB_REF_TYPE="tag", GITHUB_REF_NAME=tag)
+    assert result.returncode != 0
+    assert "Release tags must be canonical" in result.stderr
 
 
+@pytest.mark.parametrize("tag", ["1.2.3", "1.2.3rc1"])
 def test_release_commit_must_be_on_main(
-    release_repository: Path, run_policy: PolicyRunner
+    release_repository: Path, run_policy: PolicyRunner, tag: str
 ) -> None:
     git(release_repository, "checkout", "-b", "develop")
     git(release_repository, "commit", "--allow-empty", "-m", "Unmerged change")
-    git(release_repository, "tag", "1.2.3")
-    result = run_policy(GITHUB_REF_TYPE="tag", GITHUB_REF_NAME="1.2.3")
+    git(release_repository, "tag", tag)
+    result = run_policy(GITHUB_REF_TYPE="tag", GITHUB_REF_NAME=tag)
     assert result.returncode != 0
     assert "not in main history" in result.stderr
 
