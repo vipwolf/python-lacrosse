@@ -4,11 +4,12 @@ See the [README](README.md) for user-facing requirements and usage.
 
 ## Publishing
 
-The `release.yml` workflow is restricted to `vipwolf/python-lacrosse`.
-Pushes to `main` and `develop` build and publish to TestPyPI. Pull requests,
-other branches, and manual runs do not trigger it. Pushing a canonical
-`X.Y.Z` tag, optionally followed by `aN`, `bN`, or `rcN`, publishes only
-to PyPI, after environment approval. For example, use `1.0.0a1`, `1.0.0b1`,
+The `release.yml` workflow runs the Python test matrix on pull requests,
+branch pushes, and tags before allowing publication. Only pushes to `main` and
+`develop` build and publish to TestPyPI; other branches and manual runs do not
+trigger it. Pushing a canonical `X.Y.Z` tag, optionally followed by `aN`, `bN`,
+or `rcN`, publishes only to PyPI, after environment approval, provided all
+matrix tests pass. For example, use `1.0.0a1`, `1.0.0b1`,
 or `1.0.0rc1` for prereleases; spellings such as `1.0.0alpha1` are rejected
 to keep tags identical to the published version. The tagged
 commit must be in `main` history. Lightweight and annotated tags are
