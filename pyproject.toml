@@ -39,6 +39,7 @@ pylacrosse = "pylacrosse.cli_tool:main"
 dev = [
     "coverage>=7",
     "pylint>=3",
+    "pyright>=1.1,<2",
     "pytest>=8",
     "ruff>=0.15,<0.16",
     "zizmor>=1.32,<2",
@@ -65,11 +66,16 @@ version-file = "pylacrosse/version.py"
 packages = ["pylacrosse"]
 
 [tool.hatch.build.targets.sdist]
-include = ["/AUTHORS", "/COPYING", "/README.md", "/pyproject.toml", "/pylacrosse"]
+include = ["/AUTHORS", "/COPYING", "/README.md", "/pyproject.toml", "/pylacrosse", "/pylacrosse/py.typed"]
 exclude = ["/tests"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.pyright]
+include = ["pylacrosse"]
+pythonVersion = "3.11"
+typeCheckingMode = "strict"
 
 [tool.ruff]
 target-version = "py311"

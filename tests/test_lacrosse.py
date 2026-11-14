@@ -8,15 +8,6 @@ import pytest
 from pylacrosse import LaCrosse, LaCrosseSensor
 
 
-def static_vars(**kwargs):
-    def decorate(func):
-        for k in kwargs:
-            setattr(func, k, kwargs[k])
-        return func
-
-    return decorate
-
-
 class TestLacrosse(object):
     def test_refresh(self):
         mock_readline = MagicMock()
@@ -25,13 +16,13 @@ class TestLacrosse(object):
             if not hasattr(side_effect_fct, "counter"):
                 side_effect_fct.counter = 0
             values = [
-                "OK 9 1 1 4 150 106",
-                "OK 9 2 1 4 150 106",
-                "OK 9 2 1 4 150 106",
+                b"OK 9 1 1 4 150 106",
+                b"OK 9 2 1 4 150 106",
+                b"OK 9 2 1 4 150 106",
             ]
 
             if side_effect_fct.counter >= len(values):
-                value = ""
+                value = b""
             else:
                 value = values[side_effect_fct.counter]
             side_effect_fct.counter += 1
