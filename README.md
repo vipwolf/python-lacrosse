@@ -51,6 +51,17 @@ Commands:
     led                 Set traffic LED state
 ```
 
+Choose one command. Configuration options are applied before the command runs.
+For example, set the datarate and then show the device configuration:
+
+```shell
+pylacrosse -v -d /dev/ttyUSB0 -r 2 info
+```
+
+Opening the connection can reset the adapter. The library opens the serial port
+and flushes its input and output buffers, but does not wait for a firmware report
+before sending configuration commands.
+
 The LaCrosse sensor generates the ID every time the battery is changed.
 
 Use the cli tool `pylacrosse` to find your device:
