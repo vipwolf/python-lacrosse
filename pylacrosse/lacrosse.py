@@ -18,6 +18,7 @@
 import logging
 import re
 import threading
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -63,13 +64,29 @@ class LaCrosse(object):
         self._thread: threading.Thread | None = None
 
     def open(self) -> None:
-        """Open the device."""
+        """Open the device, warning if firmware readiness cannot be confirmed."""
         self._serial.port = self._port
         self._serial.baudrate = self._baud
         self._serial.timeout = self._timeout
         self._serial.open()
         self._serial.reset_input_buffer()
         self._serial.reset_output_buffer()
+        try:
+            # Opening the serial connection can reset the microcontroller.
+            self._write_cmd("v")
+            self._read_info()
+        except TimeoutError:
+            _LOGGER.warning(
+                "Device initialization could not be confirmed before timeout; "
+                "the device may or may not have initialized successfully. "
+                "Continuing with the connection open. "
+                "LaCrosseITPlusReader firmware 10.1s or newer is required. "
+                "Please contact the maintainer by opening a GitHub issue at "
+                "https://github.com/vipwolf/python-lacrosse/issues"
+            )
+        except (serial.SerialException, UnicodeDecodeError):
+            self._serial.close()
+            raise
 
     def close(self) -> None:
         """Close the device."""
@@ -80,8 +97,10 @@ class LaCrosse(object):
         """Start scan task in background."""
         self._start_worker()
 
-    def _write_cmd(self, cmd: str) -> None:
+    def _write_cmd(self, cmd: str, *, reset_input: bool = False) -> None:
         """Write a cmd."""
+        if reset_input:
+            self._serial.reset_input_buffer()
         self._serial.write(cmd.encode())
 
     @staticmethod
@@ -90,11 +109,14 @@ class LaCrosse(object):
         The output can be:
         - [LaCrosseITPlusReader.10.1s (RFM12B f:0 r:17241)]
         - [LaCrosseITPlusReader.10.1s (RFM12B f:0 t:10~3)]
+
+        Unrecognized or malformed reports return all fields as None.
         """
         re_info = re.compile(
             r"\[(?P<name>\w+).(?P<ver>.*) "
             + r"\((?P<rfm1name>\w+) (\w+):(?P<rfm1freq>\d+) "
-            + r"(?P<rfm1mode>.*)\)\]"
+            + r"(?:r:(?P<rfm1datarate>\d+)|"
+            + r"t:(?P<rfm1toggleinterval>\d+)~(?P<rfm1togglemask>\d+))\)\]"
         )
 
         info = dict[str, str | None](
@@ -114,28 +136,37 @@ class LaCrosse(object):
             info["version"] = match.group("ver")
             info["rfm1name"] = match.group("rfm1name")
             info["rfm1frequency"] = match.group("rfm1freq")
-            values = match.group("rfm1mode").split(":")
-            if values[0] == "r":
-                info["rfm1datarate"] = values[1]
-            elif values[0] == "t":
-                toggle = values[1].split("~")
-                info["rfm1toggleinterval"] = toggle[0]
-                info["rfm1togglemask"] = toggle[1]
+            info["rfm1datarate"] = match.group("rfm1datarate")
+            info["rfm1toggleinterval"] = match.group("rfm1toggleinterval")
+            info["rfm1togglemask"] = match.group("rfm1togglemask")
 
         return info
 
     def get_info(self) -> dict[str, str | None]:
-        """Get current configuration info from 'v' command."""
-        re_info = re.compile(r"\[.*\]")
+        """Get current configuration info, raising TimeoutError if unavailable."""
+        self._write_cmd("v", reset_input=True)
+        return self._read_info(wait_until_deadline=True)
 
-        self._write_cmd("v")
-        while True:
+    def _read_info(self, *, wait_until_deadline: bool = False) -> dict[str, str | None]:
+        re_info = re.compile(r"\[.*\]")
+        deadline = time.monotonic() + max(5, self._timeout)
+        latest_info = None
+        while time.monotonic() < deadline:
             line = self._serial.readline()
             line = line.decode("utf-8")
 
             match = re_info.match(line)
             if match:
-                return self._parse_info(line)
+                info = self._parse_info(line)
+                if info["name"] is not None:
+                    if not wait_until_deadline:
+                        return info
+                    # A late startup banner can precede the requested report.
+                    latest_info = info
+
+        if latest_info is not None:
+            return latest_info
+        raise TimeoutError("Timed out waiting for LaCrosse firmware information")
 
     def led_mode_state(self, state: bool) -> None:
         """Set the LED mode.

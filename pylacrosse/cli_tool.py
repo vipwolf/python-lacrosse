@@ -58,7 +58,7 @@ def configure(
     if args.datarate_rfm1:
         lacrosse.set_datarate(args.datarate_rfm1, 1)
     if args.datarate_rfm2:
-        lacrosse.set_datarate(args.datarate_rfm1, 2)
+        lacrosse.set_datarate(args.datarate_rfm2, 2)
 
     if args.toggle_mask_rfm1:
         lacrosse.set_toggle_mask(args.toggle_mask_rfm1, 1)
@@ -68,7 +68,7 @@ def configure(
     if args.toggle_interval_rfm1:
         lacrosse.set_toggle_interval(args.toggle_interval_rfm1, 1)
     if args.toggle_interval_rfm2:
-        lacrosse.set_toggle_interval(args.toggle_interval_rfm1, 2)
+        lacrosse.set_toggle_interval(args.toggle_interval_rfm2, 2)
 
 
 def scan(
@@ -98,7 +98,10 @@ def led(
     lacrosse: pylacrosse.LaCrosse, config: ConfigParser | None, args: argparse.Namespace
 ) -> None:
     state = args.led_state.lower() == "on"
-    lacrosse.led_mode_state(state)
+    try:
+        lacrosse.led_mode_state(state)
+    except KeyboardInterrupt:
+        pass
 
 
 def main(args: list[str] | None = None) -> None:
@@ -149,7 +152,7 @@ def main(args: list[str] | None = None) -> None:
         "-R", type=str, dest="datarate_rfm2", help="set the datarate for RFM2"
     )
 
-    _sub = parser.add_subparsers(title="Commands")
+    _sub = parser.add_subparsers(title="Commands", required=True)
 
     # list all devices
     subparser = _sub.add_parser("scan", help="Show all received sensors")
@@ -188,7 +191,8 @@ def main(args: list[str] | None = None) -> None:
         lacrosse.open()
         configure(lacrosse, config, parsed_args)
         parsed_args.func(lacrosse, config, parsed_args)
-
+    except KeyboardInterrupt:
+        pass
     finally:
         if lacrosse is not None:
             lacrosse.close()
