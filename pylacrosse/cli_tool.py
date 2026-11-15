@@ -16,7 +16,6 @@
 # USA
 
 import argparse
-import codecs
 import logging
 import os
 import time
@@ -29,9 +28,9 @@ _LOGGER = logging.getLogger(__name__)
 DEFAULT_DEVICE = "/dev/ttyUSB0"
 
 
-def get_known_sensor_name(sensor_id, config):
+def get_known_sensor_name(sensor_id: int, config: ConfigParser | None) -> str:
     try:
-        if str(sensor_id) in config.sections():
+        if config is not None and str(sensor_id) in config.sections():
             name = config.get(str(sensor_id), "name")
             return name
     except NoOptionError:
@@ -41,12 +40,16 @@ def get_known_sensor_name(sensor_id, config):
     return "unknown"
 
 
-def scan_callback(sensor, config):
+def scan_callback(
+    sensor: pylacrosse.LaCrosseSensor, config: ConfigParser | None
+) -> None:
     name = get_known_sensor_name(sensor.sensorid, config)
     print("%s name=%s" % (sensor, name))
 
 
-def configure(lacrosse, config, args):
+def configure(
+    lacrosse: pylacrosse.LaCrosse, config: ConfigParser | None, args: argparse.Namespace
+) -> None:
     if args.frequency_rfm1:
         lacrosse.set_frequency(args.frequency_rfm1, 1)
     if args.frequency_rfm2:
@@ -55,7 +58,7 @@ def configure(lacrosse, config, args):
     if args.datarate_rfm1:
         lacrosse.set_datarate(args.datarate_rfm1, 1)
     if args.datarate_rfm2:
-        lacrosse.set_datarate(args.datarate_rfm1, 2)
+        lacrosse.set_datarate(args.datarate_rfm2, 2)
 
     if args.toggle_mask_rfm1:
         lacrosse.set_toggle_mask(args.toggle_mask_rfm1, 1)
@@ -65,17 +68,21 @@ def configure(lacrosse, config, args):
     if args.toggle_interval_rfm1:
         lacrosse.set_toggle_interval(args.toggle_interval_rfm1, 1)
     if args.toggle_interval_rfm2:
-        lacrosse.set_toggle_interval(args.toggle_interval_rfm1, 2)
+        lacrosse.set_toggle_interval(args.toggle_interval_rfm2, 2)
 
 
-def scan(lacrosse, config, args):
+def scan(
+    lacrosse: pylacrosse.LaCrosse, config: ConfigParser | None, args: argparse.Namespace
+) -> None:
     lacrosse.register_all(scan_callback, user_data=config)
     lacrosse.start_scan()
     while True:
         time.sleep(1)
 
 
-def get_info(lacrosse, config, args):
+def get_info(
+    lacrosse: pylacrosse.LaCrosse, config: ConfigParser | None, args: argparse.Namespace
+) -> None:
     info = lacrosse.get_info()
     print("name:     {}".format(info["name"]))
     print("version:  {}".format(info["version"]))
@@ -87,12 +94,17 @@ def get_info(lacrosse, config, args):
         print("rfm1togglemask: {}".format(info["rfm1togglemask"]))
 
 
-def led(lacrosse, config, args):
+def led(
+    lacrosse: pylacrosse.LaCrosse, config: ConfigParser | None, args: argparse.Namespace
+) -> None:
     state = args.led_state.lower() == "on"
-    lacrosse.led_config(state)
+    try:
+        lacrosse.led_mode_state(state)
+    except KeyboardInterrupt:
+        pass
 
 
-def main(args=None):
+def main(args: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         "LaCrosse sensor CLI tool.", formatter_class=argparse.RawTextHelpFormatter
     )
@@ -140,7 +152,7 @@ def main(args=None):
         "-R", type=str, dest="datarate_rfm2", help="set the datarate for RFM2"
     )
 
-    _sub = parser.add_subparsers(title="Commands")
+    _sub = parser.add_subparsers(title="Commands", required=True)
 
     # list all devices
     subparser = _sub.add_parser("scan", help="Show all received sensors")
@@ -155,17 +167,19 @@ def main(args=None):
     )
     subparser.set_defaults(func=led)
 
-    args = parser.parse_args(args)
+    parsed_args = parser.parse_args(args)
 
     logging.basicConfig()
-    if args.verbose:
+    if parsed_args.verbose:
         _LOGGER.setLevel(logging.DEBUG)
 
     try:
         config = ConfigParser()
         config.read_file(
-            codecs.open(
-                os.path.expanduser("~/.lacrosse/known_sensors.ini"), "r", "UTF-8"
+            open(
+                os.path.expanduser("~/.lacrosse/known_sensors.ini"),
+                "r",
+                encoding="UTF-8",
             )
         )
     except IOError:
@@ -173,11 +187,12 @@ def main(args=None):
 
     lacrosse = None
     try:
-        lacrosse = pylacrosse.LaCrosse(args.device, 57600)
+        lacrosse = pylacrosse.LaCrosse(parsed_args.device, 57600)
         lacrosse.open()
-        configure(lacrosse, config, args)
-        args.func(lacrosse, config, args)
-
+        configure(lacrosse, config, parsed_args)
+        parsed_args.func(lacrosse, config, parsed_args)
+    except KeyboardInterrupt:
+        pass
     finally:
         if lacrosse is not None:
             lacrosse.close()

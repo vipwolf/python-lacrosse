@@ -9,6 +9,7 @@ This library works with the [Jeelink](https://www.digitalsmarties.net/products/j
 USB RF adapter and the Arduino
 [sketch](https://svn.fhem.de/trac/browser/trunk/fhem/contrib/arduino/36_LaCrosse-LaCrosseITPlusReader.zip)
 hosted on the [FHEM](https://wiki.fhem.de/wiki/JeeLink) website.
+LaCrosseITPlusReader firmware **10.1s or newer** is sugested.
 
 ## Tested Devices
 
@@ -51,6 +52,18 @@ Commands:
     led                 Set traffic LED state
 ```
 
+Choose one command. Configuration options are applied before the command runs.
+For example, set the datarate and then show the device configuration:
+
+```shell
+pylacrosse -v -d /dev/ttyUSB0 -r 2 info
+```
+
+Opening the connection can reset the adapter. The library opens the serial port
+and flushes its input and output buffers. It then sends a `v` query and waits for
+an identifiable firmware report, warning and continuing if the wait times out.
+The CLI applies configuration options after this initialization step.
+
 The LaCrosse sensor generates the ID every time the battery is changed.
 
 Use the cli tool `pylacrosse` to find your device:
@@ -91,6 +104,18 @@ line to your `ser2net.conf` file:
 
 ```text
 20001:telnet:0:/dev/ttyUSB0:57600 remctl banner
+```
+
+For modern ser2net versions, the `ser2net.yaml`configuration looks like this:
+```yaml
+define: &banner \r\nser2net port \p device \d [\B] (Debian GNU/Linux)\r\n\r\n
+
+connection: &con20001
+  accepter: telnet(rfc2217),tcp,20001
+  enable: on
+  connector: serialdev,/dev/ttyUSB0,57600n81,local
+  options:
+    banner: *banner
 ```
 
 Restart the `ser2net` daemon and connect to your remote host using `pylacrosse`
