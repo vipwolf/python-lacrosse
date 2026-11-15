@@ -60,8 +60,9 @@ pylacrosse -v -d /dev/ttyUSB0 -r 2 info
 ```
 
 Opening the connection can reset the adapter. The library opens the serial port
-and flushes its input and output buffers. Afterwards it sends configuration commands
-and waits for a firmware report before sending configuration commands.
+and flushes its input and output buffers. It then sends a `v` query and waits for
+an identifiable firmware report, warning and continuing if the wait times out.
+The CLI applies configuration options after this initialization step.
 
 The LaCrosse sensor generates the ID every time the battery is changed.
 
