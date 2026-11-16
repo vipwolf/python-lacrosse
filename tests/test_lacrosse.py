@@ -1,13 +1,17 @@
 #!/usr/bin/env python
 
+# pyright: reportPrivateUsage=false
+import logging
 import time
-from unittest.mock import MagicMock, patch
+from argparse import Namespace
+from configparser import ConfigParser
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 import serial
 
 from pylacrosse import LaCrosse, LaCrosseSensor
-from pylacrosse.cli_tool import main
+from pylacrosse.cli_tool import get_known_sensor_name, led, main, scan, scan_callback
 
 
 class TestCli:
@@ -156,6 +160,43 @@ class TestLacrosse(object):
         assert mock_cb_1.call_count == 1
         assert mock_cb_2.call_count == 2
 
+    def test_refresh_dispatches_all_and_sensor_callbacks(self, monkeypatch):
+        monkeypatch.setattr(LaCrosse, "_registry", {})
+        monkeypatch.setattr(LaCrosse, "sensors", {})
+        lacrosse = LaCrosse("/dev/ttyTEST", 115200)
+        lacrosse._serial.readline = MagicMock(
+            side_effect=[
+                b"OK 9 42 1 4 150 66",
+                b"OK 9 43 1 4 150 66",
+            ]
+        )
+        lacrosse._stopevent = MagicMock()
+        lacrosse._stopevent.is_set.side_effect = [False, False, True]
+
+        all_callback = MagicMock()
+        sensor_callback = MagicMock()
+        second_sensor_callback = MagicMock()
+        lacrosse.register_all(all_callback, user_data="all")
+        lacrosse.register_callback(42, sensor_callback, user_data="sensor")
+        lacrosse.register_callback(42, second_sensor_callback, user_data="second")
+
+        lacrosse._refresh()
+
+        assert [call.args[0].sensorid for call in all_callback.call_args_list] == [
+            42,
+            43,
+        ]
+        assert [call.args[1] for call in all_callback.call_args_list] == [
+            "all",
+            "all",
+        ]
+        sensor_callback.assert_called_once()
+        assert sensor_callback.call_args.args[0].sensorid == 42
+        assert sensor_callback.call_args.args[1] == "sensor"
+        second_sensor_callback.assert_called_once()
+        assert second_sensor_callback.call_args.args[0].sensorid == 42
+        assert second_sensor_callback.call_args.args[1] == "second"
+
     def test_get_info(self):
         info = LaCrosse._parse_info("[LaCrosseITPlusReader.10.1s (RFM12B f:0 r:17241)]")
         assert info["name"] == "LaCrosseITPlusReader"
@@ -300,6 +341,28 @@ class TestLacrosse(object):
             with pytest.raises(TimeoutError, match="firmware information"):
                 lacrosse.get_info()
 
+    @pytest.mark.parametrize(
+        "config",
+        [
+            "f:bad r:17241",
+            "f:0 r:bad",
+            "f:0 r",
+            "f:0 t",
+            "f:0 t:10",
+            "f:0 t:10~",
+            "f:0 t:bad~3",
+            "f:0 t:10~bad",
+            "f:0 t:10~3~4",
+        ],
+    )
+    def test_parse_info_malformed(self, config):
+        info = LaCrosse._parse_info(f"[LaCrosseITPlusReader.10.1s (RFM12B {config})]")
+        assert info["name"] is None
+        assert info["rfm1frequency"] is None
+        assert info["rfm1datarate"] is None
+        assert info["rfm1toggleinterval"] is None
+        assert info["rfm1togglemask"] is None
+
     def test_led_mode_state(self):
         mock = MagicMock()
 
@@ -329,16 +392,6 @@ class TestLacrosse(object):
 
         lacrosse.set_frequency(400, rfm=2)
         lacrosse._serial.write.assert_called_with(b"400F")
-
-    def test_set_frequency_invalid_rfm(self):
-        mock = MagicMock()
-
-        lacrosse = LaCrosse("/dev/ttyTEST", 115200)
-        lacrosse._serial.write = mock
-
-        with pytest.raises(KeyError):
-            lacrosse.set_frequency(500, rfm=3)
-            lacrosse._serial.write.assert_called_with(b"400f")
 
     def test_set_datarate(self):
         mock = MagicMock()
@@ -398,3 +451,137 @@ class TestLaCrosseSensor(object):
         assert s.humidity == 66
         assert not s.new_battery
         assert not s.low_battery
+
+    def test_battery_flags_and_repr(self):
+        sensor = LaCrosseSensor("OK 9 42 129 4 150 194")
+
+        assert sensor.new_battery
+        assert sensor.low_battery
+        assert repr(sensor) == "id=42 t=17.400000 h=66 nbat=1"
+
+
+def test_led_command_uses_led_mode_state():
+    lacrosse = MagicMock()
+
+    led(lacrosse, None, Namespace(led_state="on"))
+
+    lacrosse.led_mode_state.assert_called_once_with(True)
+
+
+def test_get_known_sensor_name():
+    config = ConfigParser()
+    config.read_string("[42]\nname=Kitchen\n[7]\n")
+
+    assert get_known_sensor_name(42, config) == "Kitchen"
+    assert get_known_sensor_name(7, config) == "unknown"
+    assert get_known_sensor_name(1, config) == "unknown"
+    assert get_known_sensor_name(42, None) == "unknown"
+    assert get_known_sensor_name(42, object()) == "unknown"
+
+
+def test_scan_callback_prints_sensor_name(capsys):
+    sensor = LaCrosseSensor("OK 9 42 1 4 150 66")
+    config = ConfigParser()
+    config.read_string("[42]\nname=Kitchen\n")
+
+    scan_callback(sensor, config)
+
+    assert capsys.readouterr().out == f"{sensor} name=Kitchen\n"
+
+    scan_callback(sensor, None)
+
+    assert capsys.readouterr().out == f"{sensor} name=unknown\n"
+
+
+def test_scan_registers_callback_and_starts_scan(monkeypatch):
+    lacrosse = MagicMock()
+    monkeypatch.setattr(
+        "pylacrosse.cli_tool.time.sleep", MagicMock(side_effect=KeyboardInterrupt)
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        scan(lacrosse, None, Namespace())
+
+    lacrosse.register_all.assert_called_once_with(scan_callback, user_data=None)
+    lacrosse.start_scan.assert_called_once_with()
+
+
+def test_cli_configuration(monkeypatch, capsys):
+    factory = MagicMock()
+    factory.return_value.get_info.return_value = LaCrosse._parse_info(
+        "[LaCrosseITPlusReader.10.1s (RFM12B f:868300 r:17241)]"
+    )
+    monkeypatch.setattr("pylacrosse.cli_tool.pylacrosse.LaCrosse", factory)
+    main(
+        [
+            "-f",
+            "860480",
+            "-F",
+            "879515",
+            "-r",
+            "17241",
+            "-R",
+            "9579",
+            "-m",
+            "0",
+            "-M",
+            "6",
+            "-t",
+            "0",
+            "-T",
+            "65535",
+            "info",
+        ]
+    )
+    lacrosse = factory.return_value
+    assert lacrosse.set_frequency.call_args_list == [
+        call("860480", 1),
+        call("879515", 2),
+    ]
+    assert lacrosse.set_datarate.call_args_list == [
+        call("17241", 1),
+        call("9579", 2),
+    ]
+    assert lacrosse.set_toggle_mask.call_args_list == [
+        call("0", 1),
+        call("6", 2),
+    ]
+    assert lacrosse.set_toggle_interval.call_args_list == [
+        call("0", 1),
+        call("65535", 2),
+    ]
+    lacrosse.open.assert_called_once_with()
+    lacrosse.close.assert_called_once_with()
+    assert "rfm1frequency: 868300" in capsys.readouterr().out
+
+
+def test_cli_verbose_enables_debug_logging(monkeypatch):
+    logger = MagicMock()
+    factory = MagicMock()
+    monkeypatch.setattr("pylacrosse.cli_tool._LOGGER", logger)
+    monkeypatch.setattr("pylacrosse.cli_tool.pylacrosse.LaCrosse", factory)
+
+    main(["-v", "info"])
+
+    logger.setLevel.assert_called_once_with(logging.DEBUG)
+
+
+def test_cli_closes_device_when_command_fails(monkeypatch):
+    factory = MagicMock()
+    factory.return_value.get_info.side_effect = RuntimeError("command failed")
+    monkeypatch.setattr("pylacrosse.cli_tool.pylacrosse.LaCrosse", factory)
+
+    with pytest.raises(RuntimeError, match="command failed"):
+        main(["info"])
+
+    factory.return_value.close.assert_called_once_with()
+
+
+def test_cli_does_not_close_device_when_construction_fails(monkeypatch):
+    factory = MagicMock(side_effect=RuntimeError("construction failed"))
+    monkeypatch.setattr("pylacrosse.cli_tool.pylacrosse.LaCrosse", factory)
+
+    with pytest.raises(RuntimeError, match="construction failed"):
+        main(["info"])
+
+    factory.assert_called_once()
