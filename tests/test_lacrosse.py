@@ -1,12 +1,18 @@
 #!/usr/bin/env python
 
 # pyright: reportPrivateUsage=false
+import errno
 import logging
+import os
+import select
+import socket
 
 # pyright: reportPrivateUsage=false
 import time
 from argparse import Namespace
+from concurrent.futures import ThreadPoolExecutor
 from configparser import ConfigParser
+from threading import Event
 from unittest.mock import MagicMock, call, patch
 
 import pytest
@@ -15,6 +21,77 @@ from serialx.platforms.serial_rfc2217 import RFC2217Serial
 
 from pylacrosse import LaCrosse, LaCrosseSensor
 from pylacrosse.cli_tool import get_known_sensor_name, led, main, scan, scan_callback
+
+
+@pytest.fixture
+def local_device():
+    if not hasattr(os, "openpty"):
+        pytest.skip("Local serial runtime tests require POSIX pseudo-terminals")
+    master, slave = os.openpty()
+    try:
+        lacrosse = LaCrosse(os.ttyname(slave), 115200, timeout=0.1)
+        try:
+            yield lacrosse, master
+        finally:
+            lacrosse.close()
+    finally:
+        os.close(slave)
+        os.close(master)
+
+
+@pytest.fixture
+def rfc2217_peer(request):
+    def serve(listener):
+        connection, _ = listener.accept()
+        connection.settimeout(3)
+        queries = 0
+        negotiated = set()
+        with connection, connection.makefile("rb") as stream:
+            while byte := stream.read(1):
+                if byte == b"\xff":
+                    command = stream.read(1)
+                    if command in (b"\xfb", b"\xfd"):
+                        option = stream.read(1)
+                        reply = b"\xfd" if command == b"\xfb" else b"\xfb"
+                        if (command, option) not in negotiated:
+                            negotiated.add((command, option))
+                            connection.sendall(b"\xff" + reply + option)
+                    else:
+                        assert command == b"\xfa"
+                        frame = bytearray()
+                        while not frame.endswith(b"\xff\xf0"):
+                            byte = stream.read(1)
+                            assert byte, "Disconnected during RFC2217 subnegotiation"
+                            frame.extend(byte)
+                        assert frame[0] == 44  # COM-PORT-OPTION
+                        # Acknowledge the setting with the RFC2217 server offset.
+                        connection.sendall(
+                            b"\xff\xfa\x2c" + bytes([frame[1] + 100]) + frame[2:]
+                        )
+                else:
+                    assert byte == b"v"
+                    queries += 1
+                    if queries == request.param:
+                        return queries
+                    connection.sendall(
+                        b"[LaCrosseITPlusReader.10.1s (RFM12B f:0 r:17241)]\r\n"
+                    )
+        return queries
+
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        listener.settimeout(3)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            peer = executor.submit(serve, listener)
+            try:
+                yield (
+                    f"rfc2217://127.0.0.1:{listener.getsockname()[1]}",
+                    peer,
+                    request.param,
+                )
+            finally:
+                peer.result(timeout=5)
 
 
 class TestCli:
@@ -451,6 +528,92 @@ class TestLacrosse(object):
         lacrosse._serial.write.assert_called_with(b"2m")
         lacrosse.set_toggle_mask(3, rfm=2)
         lacrosse._serial.write.assert_called_with(b"3M")
+
+
+class TestSerialBackend:
+    def test_local_open_commands_and_scan(self, local_device, monkeypatch, caplog):
+        lacrosse, master = local_device
+        monkeypatch.setattr(LaCrosse, "_registry", {})
+        monkeypatch.setattr(LaCrosse, "sensors", {})
+        received = Event()
+        readings = []
+
+        def callback(sensor, user_data):
+            readings.append(sensor)
+            received.set()
+
+        def device():
+            for command in (b"v", b"7m", b"30t"):
+                for byte in command:
+                    assert select.select([master], [], [], 3)[0], "Command timed out"
+                    assert os.read(master, 1) == bytes([byte])
+                if command == b"v":
+                    os.write(
+                        master,
+                        b"[LaCrosseITPlusReader.10.1s (RFM12B f:0 r:17241)]\r\n",
+                    )
+            os.write(master, b"OK 9 42 1 4 150 66\r\nOK 9 43 1 4 150 67\r\n")
+
+        lacrosse.register_callback(43, callback)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            peer = executor.submit(device)
+            try:
+                lacrosse.open()
+                assert not caplog.records
+                lacrosse.set_toggle_mask(7)
+                lacrosse.set_toggle_interval(30)
+                lacrosse.start_scan()
+                assert received.wait(3), "Sensor callback timed out"
+                peer.result(timeout=3)
+                assert len(readings) == 1
+                assert readings[0].sensorid == 43
+                assert readings[0].temperature == 17.4
+                assert readings[0].humidity == 67
+                assert lacrosse.sensors[42].humidity == 66
+            finally:
+                lacrosse.close()
+
+        assert not lacrosse._serial.is_open
+        assert lacrosse._thread is not None
+        assert not lacrosse._thread.is_alive()
+
+    @pytest.mark.parametrize("data", [b"", b"partial"])
+    def test_local_readline_timeout(self, local_device, data):
+        lacrosse, master = local_device
+        lacrosse._serial.open()
+        if data:
+            os.write(master, data)
+
+        start = time.monotonic()
+        assert lacrosse._serial.readline() == data
+        elapsed = time.monotonic() - start
+
+        assert 0.08 <= elapsed < 2
+        os.write(master, b"next\r\n")
+        assert lacrosse._serial.readline() == b"next\r\n"
+
+    @pytest.mark.parametrize("rfc2217_peer", [1, 2], indirect=True)
+    def test_rfc2217_disconnect_propagates(self, rfc2217_peer, caplog):
+        url, peer, disconnect_on_query = rfc2217_peer
+        lacrosse = LaCrosse(url, 115200, timeout=0.1)
+        try:
+            if disconnect_on_query == 2:
+                lacrosse.open()
+                assert lacrosse._serial.is_open
+                assert not caplog.records
+            with pytest.raises(OSError) as disconnected:
+                if disconnect_on_query == 1:
+                    lacrosse.open()
+                else:
+                    lacrosse.get_info()
+            assert disconnected.value.errno in (errno.EIO, errno.ECONNRESET)
+            if disconnect_on_query == 1:
+                assert not lacrosse._serial.is_open
+            assert peer.result(timeout=3) == disconnect_on_query
+        finally:
+            lacrosse.close()
+
+        assert not lacrosse._serial.is_open
 
 
 class TestLaCrosseSensor(object):
