@@ -16,7 +16,7 @@ maintainers = [
   { name = "Benjamin Schleinzer" },
 ]
 dependencies = [
-    "pyserial",
+    "serialx",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",

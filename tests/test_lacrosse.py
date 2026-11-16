@@ -2,13 +2,16 @@
 
 # pyright: reportPrivateUsage=false
 import logging
+
+# pyright: reportPrivateUsage=false
 import time
 from argparse import Namespace
 from configparser import ConfigParser
 from unittest.mock import MagicMock, call, patch
 
 import pytest
-import serial
+import serialx
+from serialx.platforms.serial_rfc2217 import RFC2217Serial
 
 from pylacrosse import LaCrosse, LaCrosseSensor
 from pylacrosse.cli_tool import get_known_sensor_name, led, main, scan, scan_callback
@@ -61,7 +64,7 @@ class TestLacrosse(object):
 
         serial_port.write.side_effect = write
         serial_port.readline.side_effect = readline
-        serial_port.reset_input_buffer.side_effect = pending.clear
+        serial_port.reset_read_buffer.side_effect = pending.clear
 
         with patch("pylacrosse.lacrosse.time.sleep"):
             lacrosse.open()
@@ -117,12 +120,20 @@ class TestLacrosse(object):
         lacrosse = LaCrosse("/dev/ttyTEST", 115200)
         serial_port = MagicMock()
         lacrosse._serial = serial_port
-        serial_port.readline.side_effect = serial.SerialException("Disconnected")
+        serial_port.readline.side_effect = serialx.SerialException("Disconnected")
 
-        with pytest.raises(serial.SerialException, match="Disconnected"):
+        with pytest.raises(serialx.SerialException, match="Disconnected"):
             lacrosse.open()
 
         serial_port.close.assert_called_once_with()
+
+    def test_serial_port_factory_routes_rfc2217(self):
+        lacrosse = LaCrosse("rfc2217://localhost:2217", 115200, timeout=2)
+
+        assert isinstance(lacrosse._serial, RFC2217Serial)
+        assert lacrosse._serial.baudrate == 115200
+        assert lacrosse._serial.read_timeout == 2
+        assert not lacrosse._serial.is_open
 
     def test_refresh(self):
         mock_readline = MagicMock()
@@ -230,7 +241,7 @@ class TestLacrosse(object):
         valid = b"[LaCrosseITPlusReader.10.1s (RFM69CW f:868300 t:30~7)]\r\n"
         responses = [valid, malformed] if valid_first else [malformed, valid]
         pending = []
-        serial_port.reset_input_buffer.side_effect = pending.clear
+        serial_port.reset_read_buffer.side_effect = pending.clear
         serial_port.write.side_effect = lambda command: pending.extend(responses)
         serial_port.readline.side_effect = lambda: pending.pop(0) if pending else b""
 
@@ -249,7 +260,7 @@ class TestLacrosse(object):
         startup = b"[LaCrosseITPlusReader.10.1s (RFM69CW f:868300 r:17241)]\r\n"
         current = b"[LaCrosseITPlusReader.10.1s (RFM69CW f:868300 t:30~7)]\r\n"
         pending = [startup]
-        serial_port.reset_input_buffer.side_effect = pending.clear
+        serial_port.reset_read_buffer.side_effect = pending.clear
         serial_port.write.side_effect = lambda command: pending.append(current)
         serial_port.readline.side_effect = lambda: pending.pop(0) if pending else b""
 
@@ -276,7 +287,7 @@ class TestLacrosse(object):
         startup = b"[LaCrosseITPlusReader.10.1s (RFM69CW f:868300 r:17241)]\r\n"
         current = b"[LaCrosseITPlusReader.10.1s (RFM69CW f:868300 t:30~7)]\r\n"
         pending = []
-        serial_port.reset_input_buffer.side_effect = pending.clear
+        serial_port.reset_read_buffer.side_effect = pending.clear
         serial_port.write.side_effect = lambda command: pending.extend(
             [startup, b"OK 9 1 1 4 150 106\r\n", current]
         )
