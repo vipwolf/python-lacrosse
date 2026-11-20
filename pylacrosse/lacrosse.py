@@ -22,8 +22,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-import serial
-from serial.rfc2217 import Serial as RFC2217Serial
+import serialx
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -55,8 +54,8 @@ class LaCrosse(object):
         self._port = port
         self._baud = baud
         self._timeout = timeout
-        self._serial: serial.Serial | RFC2217Serial = (
-            SerialPortFactory().create_serial_port(port)
+        self._serial: serialx.BaseSerial = serialx.serial_for_url(
+            self._port, baudrate=self._baud, read_timeout=self._timeout
         )
         self._callback: Callable[["LaCrosseSensor", Any], None] | None = None
         self._callback_data: Any = None
@@ -65,12 +64,9 @@ class LaCrosse(object):
 
     def open(self) -> None:
         """Open the device, warning if firmware readiness cannot be confirmed."""
-        self._serial.port = self._port
-        self._serial.baudrate = self._baud
-        self._serial.timeout = self._timeout
         self._serial.open()
-        self._serial.reset_input_buffer()
-        self._serial.reset_output_buffer()
+        self._serial.reset_read_buffer()
+        self._serial.reset_write_buffer()
         try:
             # Opening the serial connection can reset the microcontroller.
             self._write_cmd("v")
@@ -84,7 +80,7 @@ class LaCrosse(object):
                 "Please contact the maintainer by opening a GitHub issue at "
                 "https://github.com/vipwolf/python-lacrosse/issues"
             )
-        except (serial.SerialException, UnicodeDecodeError):
+        except (serialx.SerialException, OSError, UnicodeDecodeError):
             self._serial.close()
             raise
 
@@ -100,7 +96,7 @@ class LaCrosse(object):
     def _write_cmd(self, cmd: str, *, reset_input: bool = False) -> None:
         """Write a cmd."""
         if reset_input:
-            self._serial.reset_input_buffer()
+            self._serial.reset_read_buffer()
         self._serial.write(cmd.encode())
 
     @staticmethod
@@ -289,11 +285,3 @@ class LaCrosseSensor(object):
             self.humidity,
             self.new_battery,
         )
-
-
-class SerialPortFactory(object):
-    def create_serial_port(self, port: str) -> serial.Serial | RFC2217Serial:
-        if port.startswith("rfc2217://"):
-            return RFC2217Serial()
-        else:
-            return serial.Serial()

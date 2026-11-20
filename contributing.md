@@ -2,6 +2,16 @@
 
 See the [README](README.md) for user-facing requirements and usage.
 
+## Tests
+
+Run `python -m pytest`. Serial backend runtime tests in
+`tests/test_lacrosse.py` use POSIX pseudo-terminals for local reads, finite
+timeouts, commands, and sensor callbacks, plus a loopback RFC2217 peer for
+negotiation and disconnects during initialization and information queries.
+They need no physical adapter or external server. Pseudo-terminal tests are
+skipped where `os.openpty` is unavailable; RFC2217 tests use an ephemeral port
+on `127.0.0.1`.
+
 ## Publishing
 
 The `release.yml` workflow runs the Python test matrix on pull requests,
